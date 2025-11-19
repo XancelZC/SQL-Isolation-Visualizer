@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据库隔离级别演示</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            max-width: 1000px;
+            width: 100%;
+            flex-wrap: wrap;
+        }
+
+        /* 数据库部分 */
+        .db-panel {
+            flex: 1;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-top: 5px solid #2c3e50;
+            min-width: 280px;
+        }
+
+        .db-title {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+
+        .db-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .db-table th,
+        .db-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+
+        .db-table th {
+            background-color: #f8f9fa;
+        }
+
+        .highlight {
+            background-color: #ffeeba;
+            transition: background 0.5s;
+        }
+
+        .phantom-row {
+            animation: fadeIn 1s;
+            background-color: #d4edda;
+        }
+
+        /* 事务控制部分 */
+        .transaction-area {
+            flex: 2;
+            display: flex;
+            gap: 20px;
+            flex-direction: column;
+        }
+
+        .users-wrapper {
+            display: flex;
+            gap: 20px;
+        }
+
+        .user-card {
+            flex: 1;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .user-a {
+            border-left: 5px solid #007bff;
+        }
+
+        .user-b {
+            border-left: 5px solid #fd7e14;
+        }
+
+        .bubble {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 10px;
+            min-height: 60px;
+            font-size: 14px;
+        }
+
+        .user-title {
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .role-badge {
+            font-size: 0.8em;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: white;
+        }
+
+        .role-reader {
+            background-color: #007bff;
+        }
+
+        .role-writer {
+            background-color: #fd7e14;
+        }
+
+        /* 控制台 */
+        .controls {
+            width: 100%;
+            max-width: 1000px;
+            margin-top: 20px;
+            text-align: center;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 0 5px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: 0.2s;
+        }
+
+        .btn-tab {
+            background: #e9ecef;
+            color: #333;
+        }
+
+        .btn-tab.active {
+            background: #2c3e50;
+            color: white;
+        }
+
+        .btn-action {
+            background: #28a745;
+            color: white;
+            font-weight: bold;
+            margin-top: 15px;
+        }
+
+        .btn-action:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-reset {
+            background: #dc3545;
+            color: white;
+        }
+
+        .explanation {
+            margin-top: 15px;
+            color: #555;
+            font-style: italic;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #17a2b8;
+            text-align: left;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        .dirty-data {
+            color: #d9534f;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>数据库隔离级别演示 (Database Isolation Levels)</h1>
+
+    <div class="controls">
+        <div>
+            <button class="btn-tab active" onclick="setMode('dirty')">1. 脏读 (Dirty Read)</button>
+            <button class="btn-tab" onclick="setMode('repeatable')">2. 不可重复读 (Non-repeatable Read)</button>
+            <button class="btn-tab" onclick="setMode('phantom')">3. 幻读 (Phantom Read)</button>
+        </div>
+        <div class="explanation" id="scenario-desc">场景描述区域</div>
+        <br>
+        <button class="btn-action" id="next-btn" onclick="nextStep()">开始演示 (Start) ▶</button>
+        <button class="btn-reset" onclick="reset()">重置 (Reset)</button>
+    </div>
+
+    <br>
+
+    <div class="container">
+        <!-- 事务操作区 -->
+        <div class="transaction-area">
+            <div class="users-wrapper">
+                <!-- 事务 A -->
+                <div class="user-card user-a">
+                    <div class="user-title">
+                        <span>事务 A (Transaction A)</span>
+                        <span class="role-badge role-reader">读取者 Reader</span>
+                    </div>
+                    <div class="bubble" id="log-a">等待操作...</div>
+                </div>
+
+                <!-- 事务 B -->
+                <div class="user-card user-b">
+                    <div class="user-title">
+                        <span>事务 B (Transaction B)</span>
+                        <span class="role-badge role-writer">修改者 Writer</span>
+                    </div>
+                    <div class="bubble" id="log-b">等待操作...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据库区 -->
+        <div class="db-panel">
+            <div class="db-title">中央数据库 (Central Database)</div>
+            <table class="db-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Balance</th>
+                    </tr>
+                </thead>
+                <tbody id="db-body">
+                    <!-- 数据由 JS 生成 -->
+                </tbody>
+            </table>
+            <div style="margin-top:10px; font-size:12px; color:#888; text-align:center;">Real-time Data View</div>
+        </div>
+    </div>
+
+    <script>
+        // 状态管理
+        let currentMode = 'dirty';
+        let step = 0;
+
+        // 初始数据
+        const initialData = [
+            { id: 1, name: 'Account_A', balance: 1000 },
+        ];
+        const initialPhantomData = [
+            { id: 1, name: 'Order_1', balance: 20 },
+            { id: 2, name: 'Order_2', balance: 50 },
+        ];
+
+        // 场景配置
+        const scenarios = {
+            dirty: {
+                title: "场景：事务 B 修改了数据但未提交，事务 A 读取到了该未提交的数据（脏数据）。",
+                steps: [
+                    {
+                        action: () => {
+                            updateLog('b', 'BEGIN TRANSACTION;<br>UPDATE Account SET Balance = 2000 WHERE ID = 1;<br>(未提交 Uncommitted)');
+                            updateDbRow(1, 2000, true);
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('a', 'SELECT Balance FROM Account WHERE ID = 1;<br>结果: 2000');
+                            document.getElementById('log-a').innerHTML += ' <br><b class="dirty-data">⚠ 脏读 (Dirty Read)</b>: 读取了未提交的数据';
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('b', 'ROLLBACK; (回滚操作，撤销修改)');
+                            updateDbRow(1, 1000, false);
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('a', 'SELECT Balance FROM Account WHERE ID = 1;<br>结果: 1000 (数据已恢复)');
+                        }
+                    }
+                ]
+            },
+            repeatable: {
+                title: "场景：事务 A 在同一事务中两次读取同一数据，中间事务 B 提交了修改，导致两次读取结果不一致。",
+                steps: [
+                    {
+                        action: () => {
+                            updateLog('a', '第一次查询: SELECT Balance FROM Account WHERE ID = 1;<br>结果: 1000');
+                            updateLog('b', '空闲 (Idle)...');
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('b', 'UPDATE Account SET Balance = 500 WHERE ID = 1;<br>COMMIT; (提交修改)');
+                            updateDbRow(1, 500, false);
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('a', '第二次查询: SELECT Balance FROM Account WHERE ID = 1;<br>结果: 500');
+                            document.getElementById('log-a').innerHTML += ' <br><b class="dirty-data">⚠ 不可重复读 (Non-repeatable Read)</b>: 同一事务内读取结果不一致';
+                        }
+                    }
+                ]
+            },
+            phantom: {
+                title: "场景：事务 A 读取范围数据，中间事务 B 插入了新记录，导致事务 A 再次读取时发现了“幻影”记录。",
+                steps: [
+                    {
+                        action: () => {
+                            renderTable(initialPhantomData);
+                            updateLog('a', '第一次统计: SELECT * FROM Account;<br>结果: 2 条记录');
+                            updateLog('b', '空闲 (Idle)...');
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('b', 'INSERT INTO Account VALUES (3, "Order_3", 100);<br>COMMIT; (提交新记录)');
+                            addPhantomRow();
+                        }
+                    },
+                    {
+                        action: () => {
+                            updateLog('a', '第二次统计: SELECT * FROM Account;<br>结果: 3 条记录');
+                            document.getElementById('log-a').innerHTML += ' <br><b class="dirty-data">⚠ 幻读 (Phantom Read)</b>: 结果集出现了新行';
+                        }
+                    }
+                ]
+            }
+        };
+
+        // 初始化
+        function init() {
+            reset();
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            // 更新按钮样式
+            document.querySelectorAll('.btn-tab').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            reset();
+        }
+
+        function reset() {
+            step = 0;
+            document.getElementById('next-btn').disabled = false;
+            document.getElementById('next-btn').innerText = "开始演示 (Start) ▶";
+            document.getElementById('scenario-desc').innerText = scenarios[currentMode].title;
+            document.getElementById('log-a').innerHTML = '等待操作...';
+            document.getElementById('log-b').innerHTML = '等待操作...';
+
+            if (currentMode === 'phantom') {
+                renderTable(initialPhantomData);
+            } else {
+                renderTable(initialData);
+            }
+        }
+
+        function nextStep() {
+            const currentScenario = scenarios[currentMode];
+            if (step < currentScenario.steps.length) {
+                currentScenario.steps[step].action();
+                step++;
+                if (step >= currentScenario.steps.length) {
+                    document.getElementById('next-btn').innerText = "演示结束 (End)";
+                    document.getElementById('next-btn').disabled = true;
+                }
+            }
+        }
+
+        // 辅助函数：更新表格
+        function renderTable(data) {
+            const tbody = document.getElementById('db-body');
+            tbody.innerHTML = '';
+            data.forEach(row => {
+                tbody.innerHTML += `<tr id="row-${row.id}"><td>${row.id}</td><td>${row.name}</td><td class="val">${row.balance}</td></tr>`;
+            });
+        }
+
+        // 辅助函数：更新单行数据
+        function updateDbRow(id, newVal, isDirty) {
+            const row = document.getElementById(`row-${id}`);
+            const cell = row.querySelector('.val');
+            cell.innerText = newVal;
+            row.classList.add('highlight');
+            if (isDirty) {
+                row.style.backgroundColor = "#f8d7da"; // 脏数据显红 (Bootstrap danger light)
+            } else {
+                row.style.backgroundColor = "white";
+            }
+            setTimeout(() => row.classList.remove('highlight'), 500);
+        }
+
+        // 辅助函数：幻读插入
+        function addPhantomRow() {
+            const tbody = document.getElementById('db-body');
+            const newRow = `<tr class="phantom-row"><td>3</td><td>Order_3</td><td>100</td></tr>`;
+            tbody.innerHTML += newRow;
+        }
+
+        // 辅助函数：更新日志
+        function updateLog(user, text) {
+            const el = document.getElementById(`log-${user}`);
+            el.innerHTML = text;
+            el.style.opacity = 0;
+            setTimeout(() => { el.style.opacity = 1; }, 50);
+        }
+
+        // 启动
+        init();
+
+    </script>
+</body>
+
+</html>

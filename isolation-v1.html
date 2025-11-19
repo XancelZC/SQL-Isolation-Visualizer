@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据库隔离级别动画演示</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        h1 { color: #333; }
+        .container { display: flex; gap: 20px; max-width: 1000px; width: 100%; flex-wrap: wrap; }
+        
+        /* 数据库部分 */
+        .db-panel { flex: 1; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-top: 5px solid #2c3e50; min-width: 280px;}
+        .db-title { text-align: center; font-weight: bold; margin-bottom: 15px; color: #2c3e50; }
+        .db-table { width: 100%; border-collapse: collapse; }
+        .db-table th, .db-table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        .db-table th { background-color: #f8f9fa; }
+        .highlight { background-color: #ffeeba; transition: background 0.5s; }
+        .phantom-row { animation: fadeIn 1s; background-color: #d4edda; }
+
+        /* 事务控制部分 */
+        .transaction-area { flex: 2; display: flex; gap: 20px; flex-direction: column; }
+        .users-wrapper { display: flex; gap: 20px; }
+        .user-card { flex: 1; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: relative; }
+        .user-a { border-left: 5px solid #007bff; }
+        .user-b { border-left: 5px solid #e83e8c; }
+        .bubble { background: #f0f0f0; padding: 10px; border-radius: 10px; margin-top: 10px; min-height: 60px; font-size: 14px; }
+        .user-title { font-weight: bold; display: flex; justify-content: space-between; }
+
+        /* 控制台 */
+        .controls { width: 100%; max-width: 1000px; margin-top: 20px; text-align: center; background: white; padding: 20px; border-radius: 10px; }
+        button { padding: 10px 20px; margin: 0 5px; cursor: pointer; border: none; border-radius: 5px; font-size: 16px; transition: 0.2s; }
+        .btn-tab { background: #e9ecef; color: #333; }
+        .btn-tab.active { background: #2c3e50; color: white; }
+        .btn-action { background: #28a745; color: white; font-weight: bold; margin-top: 15px; }
+        .btn-action:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-reset { background: #dc3545; color: white; }
+
+        .explanation { margin-top: 10px; color: #666; font-style: italic; }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .dirty-data { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>数据库事务问题演示</h1>
+
+    <div class="controls">
+        <div>
+            <button class="btn-tab active" onclick="setMode('dirty')">1. 脏读 (Dirty Read)</button>
+            <button class="btn-tab" onclick="setMode('repeatable')">2. 不可重复读</button>
+            <button class="btn-tab" onclick="setMode('phantom')">3. 幻读 (Phantom Read)</button>
+        </div>
+        <div class="explanation" id="scenario-desc">场景：老板正在发工资，你正在查工资。</div>
+        <br>
+        <button class="btn-action" id="next-btn" onclick="nextStep()">开始演示 ▶</button>
+        <button class="btn-reset" onclick="reset()">重置</button>
+    </div>
+
+    <br>
+
+    <div class="container">
+        <!-- 事务操作区 -->
+        <div class="transaction-area">
+            <div class="users-wrapper">
+                <!-- 事务 A -->
+                <div class="user-card user-a">
+                    <div class="user-title">事务 A (你) <span style="color:#007bff">读取者</span></div>
+                    <div class="bubble" id="log-a">等待操作...</div>
+                </div>
+                
+                <!-- 事务 B -->
+                <div class="user-card user-b">
+                    <div class="user-title">事务 B (老板/老婆) <span style="color:#e83e8c">修改者</span></div>
+                    <div class="bubble" id="log-b">等待操作...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据库区 -->
+        <div class="db-panel">
+            <div class="db-title">中央数据库 (Table: Account)</div>
+            <table class="db-table">
+                <thead>
+                    <tr><th>ID</th><th>Name</th><th>Balance</th></tr>
+                </thead>
+                <tbody id="db-body">
+                    <!-- 数据由 JS 生成 -->
+                </tbody>
+            </table>
+            <div style="margin-top:10px; font-size:12px; color:#888; text-align:center;">Real-time Data</div>
+        </div>
+    </div>
+
+    <script>
+        // 状态管理
+        let currentMode = 'dirty';
+        let step = 0;
+        
+        // 初始数据
+        const initialData = [
+            { id: 1, name: 'User', balance: 1000 },
+        ];
+        const initialPhantomData = [
+            { id: 1, name: 'Food', balance: 20 },
+            { id: 2, name: 'Book', balance: 50 },
+        ];
+
+        // 场景配置
+        const scenarios = {
+            dirty: {
+                title: "场景：老板改了工资但没提交，你却读到了。",
+                steps: [
+                    { 
+                        action: () => {
+                            updateLog('b', '开始事务，将余额从 1000 改为 2000 (未提交)');
+                            updateDbRow(1, 2000, true); 
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('a', '查询余额：读到了 2000！(开心)');
+                            document.getElementById('log-a').innerHTML += ' <br><b class="dirty-data">⚠ 脏读发生</b>';
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('b', '发现改错了，执行 ROLLBACK (回滚)');
+                            updateDbRow(1, 1000, false);
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('a', '再查一次：怎么又是 1000 了？空欢喜一场。');
+                        } 
+                    }
+                ]
+            },
+            repeatable: {
+                title: "场景：你两次看余额，中间被老婆花了一笔钱。",
+                steps: [
+                    { 
+                        action: () => {
+                            updateLog('a', '第一次查询：余额 1000');
+                            updateLog('b', '空闲中...');
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('b', '消费 500 元，并 COMMIT (提交)');
+                            updateDbRow(1, 500, false);
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('a', '同一个事务内第二次查询：余额 500');
+                            document.getElementById('log-a').innerHTML += ' <br><b class="dirty-data">⚠ 不可重复读发生</b> (同一事务读到不同结果)';
+                        } 
+                    }
+                ]
+            },
+            phantom: {
+                title: "场景：统计消费记录条数，中间老婆新下了一单。",
+                steps: [
+                    { 
+                        action: () => {
+                            renderTable(initialPhantomData);
+                            updateLog('a', '统计记录数：当前有 2 条记录');
+                            updateLog('b', '空闲中...');
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('b', '插入新记录 ID:3, Price:100 并提交');
+                            addPhantomRow();
+                        } 
+                    },
+                    { 
+                        action: () => {
+                            updateLog('a', '再次统计：发现有 3 条记录！');
+                            document.getElementById('log-a').innerHTML += ' <br><b class="dirty-data">⚠ 幻读发生</b> (像出了幻觉多了一行)';
+                        } 
+                    }
+                ]
+            }
+        };
+
+        // 初始化
+        function init() {
+            reset();
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            // 更新按钮样式
+            document.querySelectorAll('.btn-tab').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            reset();
+        }
+
+        function reset() {
+            step = 0;
+            document.getElementById('next-btn').disabled = false;
+            document.getElementById('next-btn').innerText = "下一步 ▶";
+            document.getElementById('scenario-desc').innerText = scenarios[currentMode].title;
+            document.getElementById('log-a').innerHTML = '等待操作...';
+            document.getElementById('log-b').innerHTML = '等待操作...';
+            
+            if(currentMode === 'phantom') {
+                renderTable(initialPhantomData);
+            } else {
+                renderTable(initialData);
+            }
+        }
+
+        function nextStep() {
+            const currentScenario = scenarios[currentMode];
+            if (step < currentScenario.steps.length) {
+                currentScenario.steps[step].action();
+                step++;
+                if (step >= currentScenario.steps.length) {
+                    document.getElementById('next-btn').innerText = "演示结束";
+                    document.getElementById('next-btn').disabled = true;
+                }
+            }
+        }
+
+        // 辅助函数：更新表格
+        function renderTable(data) {
+            const tbody = document.getElementById('db-body');
+            tbody.innerHTML = '';
+            data.forEach(row => {
+                tbody.innerHTML += `<tr id="row-${row.id}"><td>${row.id}</td><td>${row.name}</td><td class="val">${row.balance}</td></tr>`;
+            });
+        }
+
+        // 辅助函数：更新单行数据
+        function updateDbRow(id, newVal, isDirty) {
+            const row = document.getElementById(`row-${id}`);
+            const cell = row.querySelector('.val');
+            cell.innerText = newVal;
+            row.classList.add('highlight');
+            if(isDirty) {
+                row.style.backgroundColor = "#ffcccc"; // 脏数据显红
+            } else {
+                row.style.backgroundColor = "white";
+            }
+            setTimeout(() => row.classList.remove('highlight'), 500);
+        }
+
+        // 辅助函数：幻读插入
+        function addPhantomRow() {
+            const tbody = document.getElementById('db-body');
+            const newRow = `<tr class="phantom-row"><td>3</td><td>Gift</td><td>100</td></tr>`;
+            tbody.innerHTML += newRow;
+        }
+
+        // 辅助函数：更新日志
+        function updateLog(user, text) {
+            const el = document.getElementById(`log-${user}`);
+            el.innerHTML = text;
+            el.style.opacity = 0;
+            setTimeout(() => { el.style.opacity = 1; }, 50);
+        }
+
+        // 启动
+        init();
+
+    </script>
+</body>
+</html>
